@@ -1,0 +1,256 @@
+# ~/.config/starship.toml
+# Fully working multi-cloud + Kubernetes prompt
+
+add_newline = false
+command_timeout = 200
+scan_timeout = 10
+
+format = """
+$directory$git_branch$git_status\n${custom.clouds}\n${custom.k8s_line}\n$character
+"""
+
+[directory]
+truncation_length = 3
+truncate_to_repo = false
+style = "blue"
+
+[git_branch]
+symbol = "🌱 "
+style = "green"
+
+[git_status]
+style = "red"
+
+[character]
+success_symbol = "❯"
+error_symbol = "❯"
+vicmd_symbol = "❮"
+
+# ======================
+# Aggregated Clouds List
+# ======================
+[custom.clouds]
+when = "true"
+command = '''
+set -e
+lines=()
+
+# GCP (fast, file-based)
+gcp_cfg_dir="$HOME/.config/gcloud/configurations"
+gcp_cfg="$gcp_cfg_dir/config_default"
+if [ ! -f "$gcp_cfg" ] && [ -f "$HOME/.config/gcloud/active_config" ]; then
+  active_cfg=$(cat "$HOME/.config/gcloud/active_config" 2>/dev/null | xargs)
+  if [ -n "$active_cfg" ] && [ -f "$gcp_cfg_dir/config_${active_cfg}" ]; then
+    gcp_cfg="$gcp_cfg_dir/config_${active_cfg}"
+  fi
+fi
+if [ -f "$gcp_cfg" ]; then
+  gcp_project=$(awk -F'=' '/^project/ {print $2}' "$gcp_cfg" | xargs)
+  if [ -n "$gcp_project" ]; then
+    # Truecolor Google letters: G(#4285F4) o(#DB4437) o(#F4B400) g(#4285F4) l(#0F9D58) e(#DB4437)
+    google_label="\033[38;2;66;133;244mG\033[0m\033[38;2;219;68;55mo\033[0m\033[38;2;244;180;0mo\033[0m\033[38;2;66;133;244mg\033[0m\033[38;2;15;157;88ml\033[0m\033[38;2;219;68;55me\033[0m"
+    lines+=("• ⬢  ${google_label}: \033[1m${gcp_project}\033[0m")
+  fi
+fi
+
+# AWS (file-based): parse profiles and regions
+aws_items=()
+aws_cfg="$HOME/.aws/config"
+aws_creds="$HOME/.aws/credentials"
+profiles_list=()
+
+# include AWS_PROFILE if set
+if [ -n "$AWS_PROFILE" ]; then profiles_list+=("$AWS_PROFILE"); fi
+
+# parse profiles from config
+if [ -f "$aws_cfg" ]; then
+  while IFS= read -r line; do
+    case "$line" in
+      \[*\]*)
+        sect=${line#\[}
+        sect=${sect%\]}
+        if [[ "$sect" == profile* ]]; then
+          prof=${sect#profile }
+        else
+          prof="$sect"
+        fi
+        [ -n "$prof" ] && profiles_list+=("$prof")
+      ;;
+    esac
+  done <"$aws_cfg"
+fi
+
+# parse profiles from credentials
+if [ -f "$aws_creds" ]; then
+  while IFS= read -r line; do
+    case "$line" in
+      \[*\]*)
+        prof=${line#\[}
+        prof=${prof%\]}
+        [ -n "$prof" ] && profiles_list+=("$prof")
+      ;;
+    esac
+  done <"$aws_creds"
+fi
+
+# de-duplicate profiles
+uniq_profiles=()
+for p in "${profiles_list[@]}"; do
+  skip=0
+  for up in "${uniq_profiles[@]}"; do [ "$up" = "$p" ] && skip=1 && break; done
+  [ $skip -eq 0 ] && uniq_profiles+=("$p")
+done
+
+# map each profile to region from config
+for p in "${uniq_profiles[@]}"; do
+  [ -z "$p" ] && continue
+  r=""
+  if [ -f "$aws_cfg" ]; then
+    in_section=0
+    while IFS= read -r line; do
+      case "$line" in
+        \[*\]*)
+          sect=${line#\[}
+          sect=${sect%\]}
+          if [[ "$sect" == "profile $p" ]] || [[ "$sect" == "$p" ]]; then
+            in_section=1
+          else
+            in_section=0
+          fi
+        ;;
+        region\ *=*)
+          if [ $in_section -eq 1 ]; then
+            r=$(echo "$line" | awk -F'=' '{print $2}' | xargs)
+            break
+          fi
+        ;;
+      esac
+    done <"$aws_cfg"
+  fi
+  [ -z "$r" ] && r="unknown"
+  aws_items+=("${p}:${r}")
+done
+
+if [ ${#aws_items[@]} -gt 0 ]; then
+  joined=$(printf ", %s" "${aws_items[@]}")
+  lines+=("• 📦 \033[38;2;255;153;0mAWS:\033[0m \033[1m${joined:2}\033[0m")
+fi
+
+# Azure (profile file present)
+if [ -f "$HOME/.azure/azureProfile.json" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    az_name=$(jq -r '.subscriptions[0].name // empty' "$HOME/.azure/azureProfile.json" 2>/dev/null)
+  fi
+  if [ -n "$az_name" ]; then
+    lines+=("• 💠 \033[38;2;0;120;212mAZURE:\033[0m \033[1m${az_name}\033[0m")
+  fi
+fi
+
+# HashiCorp Cloud Platform / Terraform Cloud
+hcp_dir="$HOME/.config/hcp"
+hcp_json="$hcp_dir/creds-cache.json"
+tfc_file="$HOME/.terraform.d/credentials.tfrc.json"
+
+if [ -f "$hcp_json" ] || [ -f "$tfc_file" ]; then
+  hcp_parts=()
+  if [ -f "$tfc_file" ]; then
+    if command -v jq >/dev/null 2>&1; then
+      hosts=$(jq -r '.credentials | keys | join(", ")' "$tfc_file" 2>/dev/null)
+    else
+      hosts=$(sed -n 's/^[[:space:]]*"\(.*\)":.*$/\1/p' "$tfc_file" | tr '\n' ',' | sed 's/,$//')
+    fi
+    [ -n "$hosts" ] && hcp_parts+=("Terraform Cloud: ${hosts}")
+  fi
+  if [ -f "$hcp_json" ]; then
+    if command -v jq >/dev/null 2>&1; then
+      sp=$(jq -r '."service-principals" | keys | join(", ")' "$hcp_json" 2>/dev/null)
+    else
+      sp=$(sed -n 's/^[[:space:]]*"\(.*\)": *{$/\1/p' "$hcp_json" | head -n 1)
+    fi
+    [ -n "$sp" ] && hcp_parts+=("HCP SPs: ${sp}")
+  fi
+  if [ ${#hcp_parts[@]} -gt 0 ]; then
+    info=$(printf "; %s" "${hcp_parts[@]}"); info=${info:2}
+    lines+=("• 🚀 \033[38;2;102;51;153mHCP:\033[0m \033[1m${info}\033[0m")
+  fi
+fi
+
+# Only print if any
+if [ ${#lines[@]} -gt 0 ]; then
+  for l in "${lines[@]}"; do printf "%b\n" "$l"; done
+fi
+'''
+style = "bold white"
+format = "$output"
+
+# Standalone Kubernetes block (fast, uses kubectl briefly)
+[custom.k8s_line]
+when = "test -n \"$KUBECONFIG\" || test -f $HOME/.kube/config"
+command = '''
+# Determine kubeconfig path
+cfg="${KUBECONFIG%%:*}"
+[ -z "$cfg" ] && cfg="$HOME/.kube/config"
+[ ! -f "$cfg" ] && exit 0
+
+# Extract current-context
+ctx=$(awk '/^current-context:/ {print $2; exit}' "$cfg")
+[ -z "$ctx" ] && exit 0
+
+# Extract cluster and namespace for current context (best-effort YAML scrape)
+cluster=""
+ns=""
+awk -v target="$ctx" '
+  $0 ~ /^contexts:/ {inctx=1; next}
+  inctx && $0 ~ /^- name:/ {name=$3}
+  inctx && $0 ~ /context:/ {inblock=1}
+  inblock && $0 ~ /cluster:/ {cl=$2}
+  inblock && $0 ~ /namespace:/ {n=$2}
+  inblock && $0 ~ /^\s*- name:/ {if (name==target){print cl"|"n; exit} inblock=0}
+  END{ if (name==target) print cl"|"n }
+' "$cfg" | {
+  IFS='|' read -r cluster ns
+  :
+}
+[ -z "$cluster" ] && cluster="$ctx"
+
+# Infer env from context/cluster name
+name="$ctx $cluster"
+env=""
+case "$name" in
+  *prod*|*production*) env="🔴 PROD" ;;
+  *stage*|*staging*) env="🟠 STAGE" ;;
+  *dev*|*development*) env="🟢 DEV" ;;
+  *ite*) env="🟢 ITE" ;;
+esac
+
+# Split emoji and acronym for coloring
+env_emoji=""; env_text="$env"
+case "$env" in
+  "🔴 PROD") env_emoji="🔴"; env_text="PROD" ;;
+  "🟠 STAGE") env_emoji="🟠"; env_text="STAGE" ;;
+  "🟢 DEV") env_emoji="🟢"; env_text="DEV" ;;
+  "🟢 ITE") env_emoji="🟢"; env_text="ITE" ;;
+esac
+
+color="0"
+case "$env_text" in
+  PROD) color="31" ;;
+  STAGE) color="33" ;;
+  DEV|ITE) color="32" ;;
+esac
+
+if [ -n "$env_text" ]; then
+  if [ -n "$env_emoji" ]; then
+    printf "• ⎈  \033[38;2;50;108;229mK8S:\033[0m %s \033[1;%sm%s\033[0m : \033[1m%s\033[0m\n" "$env_emoji" "$color" "$env_text" "$cluster"
+  else
+    printf "• ⎈  \033[38;2;50;108;229mK8S:\033[0m \033[1;%sm%s\033[0m : \033[1m%s\033[0m\n" "$color" "$env_text" "$cluster"
+  fi
+else
+  printf "• ⎈  \033[38;2;50;108;229mK8S:\033[0m \033[1m%s\033[0m\n" "$cluster"
+fi
+'''
+style = "bold white"
+format = "$output"
+
+#[custom.hcp_line]
+# removed; HCP is part of custom.clouds

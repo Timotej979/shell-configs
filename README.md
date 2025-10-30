@@ -1,5 +1,13 @@
 # 🚀 Shell Configs for Cloud/DevOps Engineers
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Starship](https://img.shields.io/badge/Starship-DD0B78?logo=starship&logoColor=white)](https://starship.rs/)
+[![AWS](https://img.shields.io/badge/AWS-FF9900?logo=amazonaws&logoColor=white)](https://aws.amazon.com/)
+[![GCP](https://img.shields.io/badge/GCP-4285F4?logo=googlecloud&logoColor=white)](https://cloud.google.com/)
+[![Azure](https://img.shields.io/badge/Azure-0078D4?logo=microsoftazure&logoColor=white)](https://azure.microsoft.com/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
+[![Terraform](https://img.shields.io/badge/Terraform-7B42BC?logo=terraform&logoColor=white)](https://www.terraform.io/)
+
 Multi-cloud shell prompt configuration that displays your active cloud contexts at a glance. Built with [Starship](https://starship.rs/) for speed and reliability.
 
 ## Features

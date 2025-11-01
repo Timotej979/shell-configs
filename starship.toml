@@ -142,37 +142,61 @@ if [ -f "$HOME/.azure/azureProfile.json" ]; then
     az_name=$(jq -r '.subscriptions[0].name // empty' "$HOME/.azure/azureProfile.json" 2>/dev/null)
   fi
   if [ -n "$az_name" ]; then
-    lines+=("• 💠 \033[38;2;0;120;212mAZURE:\033[0m \033[1m${az_name}\033[0m")
+    lines+=("• \033[38;2;0;120;212mAZURE:\033[0m \033[1m${az_name}\033[0m")
   fi
 fi
 
-# HashiCorp Cloud Platform / Terraform Cloud
+# HashiCorp Cloud Platform
 hcp_dir="$HOME/.config/hcp"
 hcp_json="$hcp_dir/creds-cache.json"
 tfc_file="$HOME/.terraform.d/credentials.tfrc.json"
+hcp_active="$hcp_dir/active_profile.hcl"
 
-if [ -f "$hcp_json" ] || [ -f "$tfc_file" ]; then
-  hcp_parts=()
-  if [ -f "$tfc_file" ]; then
-    if command -v jq >/dev/null 2>&1; then
-      hosts=$(jq -r '.credentials | keys | join(", ")' "$tfc_file" 2>/dev/null)
-    else
-      hosts=$(sed -n 's/^[[:space:]]*"\(.*\)":.*$/\1/p' "$tfc_file" | tr '\n' ',' | sed 's/,$//')
+hcp_parts=()
+hcp_configured=false
+
+# Terraform Cloud - only if has valid credentials
+if [ -f "$tfc_file" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    hosts=$(jq -r '.credentials // {} | keys | if length > 0 then join(", ") else empty end' "$tfc_file" 2>/dev/null)
+  else
+    hosts=$(sed -n 's/^[[:space:]]*"\(.*\)":.*$/\1/p' "$tfc_file" | tr '\n' ',' | sed 's/,$//')
+  fi
+  if [ -n "$hosts" ] && [ "$hosts" != "null" ] && [ "$hosts" != "" ]; then
+    hcp_parts+=("Terraform Cloud: ${hosts}")
+    hcp_configured=true
+  fi
+fi
+
+# HCP credentials - check for valid login or service principals
+if [ -f "$hcp_json" ]; then
+  if command -v jq >/dev/null 2>&1; then
+    # Check for regular user login (new CLI structure)
+    login_token=$(jq -r '.login.access_token // empty' "$hcp_json" 2>/dev/null)
+    if [ -n "$login_token" ] && [ "$login_token" != "null" ] && [ "$login_token" != "" ]; then
+      hcp_parts+=("HCP (logged in)")
+      hcp_configured=true
     fi
-    [ -n "$hosts" ] && hcp_parts+=("Terraform Cloud: ${hosts}")
-  fi
-  if [ -f "$hcp_json" ]; then
-    if command -v jq >/dev/null 2>&1; then
-      sp=$(jq -r '."service-principals" | keys | join(", ")' "$hcp_json" 2>/dev/null)
-    else
-      sp=$(sed -n 's/^[[:space:]]*"\(.*\)": *{$/\1/p' "$hcp_json" | head -n 1)
+    
+    # Check for service principals (old structure)
+    if [ "$hcp_configured" = false ]; then
+      sp_keys=$(jq -r '."service-principals" // {} | if type == "object" then keys | if length > 0 then join(", ") else empty end else empty end' "$hcp_json" 2>/dev/null)
+      if [ -n "$sp_keys" ] && [ "$sp_keys" != "null" ] && [ "$sp_keys" != "" ]; then
+        # Verify at least one SP has a token
+        sp_token=$(jq -r '."service-principals" | to_entries | .[0].value.access_token // empty' "$hcp_json" 2>/dev/null)
+        if [ -n "$sp_token" ] && [ "$sp_token" != "null" ] && [ "$sp_token" != "" ]; then
+          hcp_parts+=("HCP SPs: ${sp_keys}")
+          hcp_configured=true
+        fi
+      fi
     fi
-    [ -n "$sp" ] && hcp_parts+=("HCP SPs: ${sp}")
   fi
-  if [ ${#hcp_parts[@]} -gt 0 ]; then
-    info=$(printf "; %s" "${hcp_parts[@]}"); info=${info:2}
-    lines+=("• 🚀 \033[38;2;102;51;153mHCP:\033[0m \033[1m${info}\033[0m")
-  fi
+fi
+
+# Only add HCP line if we found valid configuration
+if [ "$hcp_configured" = true ] && [ ${#hcp_parts[@]} -gt 0 ]; then
+  info=$(printf "; %s" "${hcp_parts[@]}"); info=${info:2}
+  lines+=("• 🚀 \033[38;2;102;51;153mHCP:\033[0m \033[1m${info}\033[0m")
 fi
 
 # Only print if any
